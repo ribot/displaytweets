@@ -216,7 +216,7 @@ class DisplayTweets {
             'access_token' => null,
             'access_token_secret' => null,
             'screen_name' => 'matthewruddycom',
-            'count' => 5,
+            'retrieve_count' => 5,
             'include_rts' => true,
             'exclude_replies' => false
         ) );
@@ -440,15 +440,31 @@ class DisplayTweets {
                                 <th scope="row"><label for="screen_name"><?php _e( 'Screen Name', 'displaytweets' ); ?></label></th>
                                 <td>
                                     <input type="text" name="settings[screen_name]" id="screen_name" class="regular-text" value="<?php echo $s['screen_name']; ?>">
-                                    <p class="description"><?php _e( 'The screen name of the user for whom to return results for.', 'displaytweets' ); ?></p>
+                                    <p class="description"><?php _e( 'The screen name of the owner of the list to return results for (e.g. for "ribot/studio" it would be "ribot").', 'displaytweets' ); ?></p>
                                 </td>
                             </tr>
 
                             <tr valign="top">
-                                <th scope="row"><label for="count"><?php _e( 'Count', 'displaytweets' ); ?></label></th>
+                                <th scope="row"><label for="slug"><?php _e( 'List name', 'displaytweets' ); ?></label></th>
                                 <td>
-                                    <input type="number" step="1" min="1" name="settings[count]" id="count" value="<?php echo $s['count']; ?>">
-                                    <p class="description"><?php _e( 'Specifies the number of tweets to try and retrieve, up to a maximum of 200.', 'displaytweets' ); ?></p>
+                                    <input type="text" name="settings[slug]" id="slug" class="regular-text" value="<?php echo $s['slug']; ?>">
+                                    <p class="description"><?php _e( 'The name of the list to return results for (e.g. for "ribot/studio" it would be "studio").', 'displaytweets' ); ?></p>
+                                </td>
+                            </tr>
+
+                            <tr valign="top">
+                                <th scope="row"><label for="retrieve_count"><?php _e( 'Retrieve count', 'displaytweets' ); ?></label></th>
+                                <td>
+                                    <input type="number" step="1" min="1" name="settings[retrieve_count]" id="retrieve_count" value="<?php echo $s['retrieve_count']; ?>">
+                                    <p class="description"><?php _e( 'Specifies the number of tweets to try and retrieve, up to a maximum of 200. Note: How high this is will depend on how aggressive your filtering is', 'displaytweets' ); ?></p>
+                                </td>
+                            </tr>
+
+                            <tr valign="top">
+                                <th scope="row"><label for="display_count"><?php _e( 'Display count', 'displaytweets' ); ?></label></th>
+                                <td>
+                                    <input type="number" step="1" min="1" name="settings[display_count]" id="display_count" value="<?php echo $s['display_count']; ?>">
+                                    <p class="description"><?php _e( 'Specifies the number of tweets to show (after filtering)', 'displaytweets' ); ?></p>
                                 </td>
                             </tr>
 
@@ -528,15 +544,18 @@ class DisplayTweets {
 
         /** Merge arugments with defaults */
         $args = apply_filters( 'displaytweets_args', array(
-            'screen_name' => $settings['screen_name'],
-            'count' => $settings['count'],
+            'owner_screen_name' => $settings['screen_name'],
+            'slug' => $settings['slug'],
+            'count' => $settings['retrieve_count'],
             'include_rts' => $settings['include_rts'],
+            'include_entities' => false,
             'exclude_replies' => $settings['exclude_replies']
         ) );
 
         /** Get tweets from transient. False if it has expired */
-        $tweets = get_transient( "displaytweets_tweets" );
-        if ( $tweets === false ) {
+        $transient = get_transient( "displaytweets_tweets" );
+
+        if ( $transient === false ) {
 
             /** Require the twitter auth class */
             if ( !class_exists('TwitterOAuth') )
@@ -552,7 +571,7 @@ class DisplayTweets {
 
             /** Get tweets */
             $tweets = $twitterConnection->get(
-                'statuses/user_timeline',
+                'lists/statuses',
                 $args
             );
 
@@ -560,8 +579,22 @@ class DisplayTweets {
             if ( !$tweets || isset( $tweets->errors ) )
                 return false;
 
+            /** Filter tweets before caching */
+            if ( has_filter( 'displaytweets_tweet_filter' ) ) {
+                $tweets = apply_filters( 'displaytweets_tweet_filter', $tweets, $settings );
+            } else {
+                $tweets = array_slice( $tweets, 0, $settings[ 'display_count' ] );
+            }
+
+            /** Had trouble with PHP serializing tweets when setting transient so do it manually */
+            $serialized = base64_encode( serialize( $tweets ) );
+
             /** Set tweets */
-            set_transient( "displaytweets_tweets", $tweets, apply_filters( 'displaytweets_refresh_timeout', self::$refresh ) );
+            set_transient( "displaytweets_tweets", $serialized, apply_filters( 'displaytweets_refresh_timeout', self::$refresh ) );
+
+        } else {
+
+            $tweets = unserialize( base64_decode( $transient ) );
 
         }
 
@@ -588,12 +621,12 @@ class DisplayTweets {
         }
 
         /** Print the tweets */
-        foreach ( $tweets as $tweet ) {
+        foreach ( $tweets as $key=>$tweet ) {
 
             if ( has_action( 'displaytweets_tweet_template' ) ) :
 
                 /** Execute action that should print the tweet template */
-                do_action( 'displaytweets_tweet_template', $tweet );
+                do_action( 'displaytweets_tweet_template', $tweet, $key );
 
             else :
 
